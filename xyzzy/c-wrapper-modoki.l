@@ -96,6 +96,54 @@ typedef enum _MEMORY_RESOURCE_NOTIFICATION_TYPE {
 |#
 
 
+;;;
+
+(defmacro define-c-wrapper (c-src dll-name)
+  )
+
+;;; 正規表現
+
+(defun capture (&rest args)
+  (format nil "\\(~{~A~}\\)" args))
+
+(defun group (&rest args)
+  (format nil "\\(?:~{~A~}\\)" args))
+
+(defun maybe (&rest args)
+  (format nil "\\(?:\\(?:~{~A~}\\)?\\)" args))
+
+(defun any (&rest args)
+  (format nil "\\(?:~{~A~^\\|~}\\)" args))
+
+(defun repeat* (&rest args)
+  (format nil "\\(?:\\(?:~{~A~}\\)*\\)" args))
+
+(defun repeat+ (&rest args)
+  (format nil "\\(?:\\(?:~{~A~}\\)+\\)" args))
+
+(let ((space+ "[ \t]+")
+      (space* "[ \t]*")
+      (ident "\\**[ \t]*\\(?:[a-zA-Z_][a-zA-Z0-9_]*\\)"))
+  (defparameter *typedef-simple-regexp* (concat "typedef" space+
+                                                (capture ident (repeat* space+ ident))
+                                                space+
+                                                (capture
+                                                 ident
+                                                 (repeat* space* "," space* ident))
+                                                ";"
+                                                ))
+
+  (defparameter *typedef-complex-regexp* (concat "typedef" space+
+                                                 (capture (any "struct" "enum")) space+
+                                                 (capture (maybe ident)) space*
+                                                 "{" (capture ".*?") "}" space*
+                                                 (capture
+                                                  ident
+                                                  (repeat* space* "," space* ident))
+                                                 ";"
+                                                 ))
+  )
+
 ;;; 関数
 
 (defmacro define-c-function-wrapper (c-src dll-name &optional export-name)
@@ -183,16 +231,70 @@ typedef enum _MEMORY_RESOURCE_NOTIFICATION_TYPE {
                           (incf last-val)))))
             (split-string (string-trim " " c-src) #\,))))
 
+;;; #define
+
+(defmacro define-c-macro-wrapper (c-src)
+  `(progn
+     ,(define-c-macro-wrapper-helper c-src)))
+
+(defun define-c-macro-wrapper-helper (c-src)
+  (let ((defs (parse-c-macro c-src)))
+    (if (and (atom (cadr defs))
+             (fboundp (cadr defs)))
+        ;; #define FooA Foo
+        `(setf (symbol-function ',(car defs))
+               (symbol-function ',(cadr defs)))
+      ;; #define Foo 1
+      `(c:*define ,@defs))))
+
+(defun parse-c-macro (c-src)
+  (setf c-src (cleanup-c-src c-src))
+  (unless (string-match "#define[ \t]+\\([a-zA-Z0-9_]+\\)[ \t]+\\(.*\\)"
+                        c-src)
+    (error "parse error"))
+  (let ((macro-name (match-symbol 1))
+        (macro-body (match-string 2)))
+    (let ((body (parse-c-macro-body macro-body)))
+      (list macro-name body))))
+
+(defun parse-c-macro-body (c-src)
+  (cond ((string-match "^N?\"\\(.*?\\)\"" c-src)
+         (match-string 1))
+        ((string-match "^\\([a-zA-Z_][a-zA-Z0-9_]*\\)" c-src)
+         (match-symbol 1))
+        (t
+         (infix->prefix c-src))))
+
+(defun infix->prefix (string)
+  (let ((*read-default-float-format* 'double-float)
+	(ed::*calc-token* (let ((token nil))
+			(with-input-from-string (s string)
+			  (do ((tok (ed::calc-next-token s) (ed::calc-next-token s)))
+			      ((null tok) (nreverse token))
+			    (push tok token))))))
+    (let ((expr (and ed::*calc-token* (ed::calc-expr))))
+      (when ed::*calc-token*
+        (error "unexpected ~A." (ed::calc-token-string (car ed::*calc-token*))))
+      (reintern-calc-package expr))))
+
+;; シンボルは calc::DWORD などになるので winapi::DWORD に変換
+(defun reintern-calc-package (list)
+  (if (atom list)
+      (if (symbolp list)
+          (intern (string list))
+        list)
+    (mapcar #'reintern-calc-package list)))
+
+
 ;;; typedef
 
 (defun parse-c-typedef-complex (c-src body-parser)
   (setf c-src (cleanup-c-src c-src))
-  (unless (string-match "typedef \\(?:enum\\|struct\\) *\\([a-zA-Z0-9_]+\\)? *{\\(.+?\\)} *\\(.+?\\);"
-                        c-src)
+  (unless (string-match *typedef-complex-regexp* c-src)
     (error "parse error2"))
-  (let ((name (match-symbol 1))
-        (body-decl (match-string 2))
-        (alias-decl (match-string 3)))
+  (let ((name (match-symbol 2))
+        (body-decl (match-string 3))
+        (alias-decl (match-string 4)))
     (let ((body (funcall body-parser body-decl))
           (aliases (parse-c-typedef-aliases alias-decl)))
       (when (and (car aliases)
@@ -219,7 +321,15 @@ typedef enum _MEMORY_RESOURCE_NOTIFICATION_TYPE {
 ;;; ユーティリティ
 
 (defun cleanup-c-src (c-src)
+  ; キャスト
+  (setf c-src (substitute-string c-src "([^()]*?)(\\([^()]*?\\))" "\\1"))
+  ; 型指定
+  (setf c-src (substitute-string c-src "\\([0-9]+\\)[ULFD]+" "\\1"))
+  ; 継続行
+  (setf c-src (substitute-string c-src "\\\\\n" ""))
+  ; コメント
   (setf c-src (substitute-string c-src "//.*$" ""))
+  ; 余計な空白・改行
   (setf c-src (substitute-string c-src "[ \r\t\f\n]+" " "))
   c-src)
 
