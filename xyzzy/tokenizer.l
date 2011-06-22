@@ -4,6 +4,28 @@
 (defparameter *c-keyword-list*
   (list "typedef" "enum" "struct" "union" "const"))
 
+(defparameter *c-operator-list*
+  (list "=" "*=" "/=" "%=" "+=" "-=" "<<=" ">>=" "&=" "^=" "|="
+        "||" "&&" "|" "&" "~"
+        "==" "!="
+        "<" ">" "<=" ">="
+        "<<" ">>"
+        "+" "-" "*" "/" "%"
+        "++" "--" "sizeof"
+        "." "->" "++" "--"))
+
+(defparameter *c-paren-list*
+  (list "(" ")" "{" "}" "[" "]"))
+
+(defparameter *c-operator-list-regexp*
+  (format nil "\\(~{~A~^\\|~}\\)"
+          (mapcar 'regexp-quote *c-operator-list*)))
+
+(defparameter *c-paren-list-regexp*
+  (format nil "\\(~{~A~^\\|~}\\)"
+          (mapcar 'regexp-quote *c-paren-list*)))
+
+
 (defun make-token (lineno column type value)
   (list lineno column type value))
 
@@ -94,6 +116,14 @@
             ((looking-at "\\([+-]?\\)\\([1-9][0-9]*\\)[ULul]*")
              (forward-matched)
              (values :number (looking-number 10)))
+            ((looking-at "\\.\\.\\.")
+             (forward-matched)
+             (values :vaarg (substr)))
+            ((looking-at *c-operator-list-regexp*)
+             (forward-matched)
+             (values :operator (intern (substr) :keyword)))
+            ((looking-at *c-paren-list-regexp*)
+             (values :paren (current-char)))
             (t
              (values :punc (current-char)))
             ))))
