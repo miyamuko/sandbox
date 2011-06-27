@@ -1,10 +1,28 @@
-; -*- mode: lisp-interaction -*-
-
 (load "tokenizer.l")
+(load "preprocessor.l")
 
 (defvar *prev-token* nil)
 (defvar *token* nil)
 (defvar *eat-whitespace-or-comment-automatically* t)
+
+(defstruct c-type
+  type decl)
+
+(defstruct c-struct
+  name members)
+
+(defstruct c-enum
+  name members)
+
+(defstruct c-func
+  name return-type args)
+
+(defstruct c-callback
+  type return-type args)
+
+(defstruct c-macro
+  name value)
+
 
 (defun peek-token ()
   (car *token*))
@@ -29,10 +47,6 @@
 
 (defun punc-p (value)
   (and (eq :punc (peek-token-type))
-       (eq value (peek-token-value))))
-
-(defun paren-p (value)
-  (and (eq :paren (peek-token-type))
        (eq value (peek-token-value))))
 
 (defun operator-p (value)
@@ -98,68 +112,134 @@
 (defun eat-token-value (&optional type value)
   (token-value (eat-token type value)))
 
+(defun eat-tokens-of-line ()
+  (let ((*eat-whitespace-or-comment-automatically* nil)
+        r)
+    (while (and (has-more-token-p)
+                (not (end-of-line-p)))
+      (case (peek-token-type)
+        ((:comment :whitespace)
+         (eat-whitespace-or-comment :eat-newline nil))
+        (t
+         (push (eat-token-value) r))))
+    (eat-whitespace-or-comment :eat-newline t)
+    (nreverse r)))
+
 (defun eat-ident (value)
   (eat-token :ident value))
 
 (defun eat-punc (value)
   (eat-token :punc value))
 
-(defun eat-paren (value)
-  (eat-token :paren value))
-
 (defun eat-operator (value)
   (eat-token :operator value))
 
 
-(defun parse (c-src)
-  (let ((*token* (tokenize-string c-src))
-        ast)
+(defun parse-file (c-header-file)
+  (parse (tokenize-file c-header-file :ignore '(:whitespace :comment))))
+
+(defun parse-string (c-header-string)
+  (parse (tokenize-string c-header-string :ignore '(:whitespace :comment))))
+
+(defun parse (token)
+  (let ((*token* (preprocess token)))
+    (parse1)))
+
+(defun parse1 ()
+  (let (ast)
     (while *token*
       (eat-whitespace-or-comment)
-      (push (case (peek-token-type)
-              (:directive (parse-directive))
-              (:ident (parse-ident))
-              (t (error-unknown-token)))
-            ast))
+      (let ((defs (case (peek-token-type)
+                    (:directive (parse-directive))
+                    (:ident (parse-ident))
+                    (t
+                     (error-unknown-token)))))
+        (dolist (def (if (atom defs)
+                         (list defs)
+                       defs))
+          (push def ast))))
     (nreverse ast)))
-
 
 (defun parse-directive ()
   (case (peek-token-value)
     (:define (parse-directive-define))
+    (:include (parse-directive-include))
+    (:pragma (parse-directive-ignore))
+    (:ifdef (parse-directive-ignore))
+    (:if (parse-directive-if))
+    (:else (parse-directive-else))
+    (:endif (parse-directive-endif))
     (t (error-unknown-token))))
 
 (defun parse-directive-define ()
+  (eat-token :directive :define)
+  (eat-whitespace-or-comment :eat-newline nil)
   (let ((*eat-whitespace-or-comment-automatically* nil))
-    (eat-token :directive :define)
-    (eat-whitespace-or-comment :eat-newline nil)
     (let ((name (eat-token-value :ident))
-          value)
-      (while (not (end-of-line-p))
-        (eat-whitespace-or-comment :eat-newline nil)
-        (push (eat-token-value) value))
-      (list :define name (nreverse value)))))
+          (value (eat-tokens-of-line)))
+      (make-c-macro :name name :value value))))
 
+(defun parse-directive-ignore ()
+  (eat-tokens-of-line)
+  nil)
+
+(defun parse-directive-include ()
+  (eat-tokens-of-line)
+  nil)
+
+(defun parse-directive-if ()
+  (eat-tokens-of-line)
+  nil)
+
+(defun parse-directive-else ()
+  (eat-tokens-of-line)
+  nil)
+
+(defun parse-directive-endif ()
+  (eat-tokens-of-line)
+  nil)
 
 (defun parse-ident ()
   (case (peek-token-value)
     (:typedef (parse-typedef))
+    (:extern (parse-extern))
     (t (parse-function-decl))))
+
+(defmacro restore-parse-error (&body body)
+  (let ((gtoken (gensym)))
+    `(let ((,gtoken *token*))
+       (handler-case
+           (progn ,@body)
+         (error (c)
+           (setf *token* ,gtoken)
+           nil)))))
 
 (defun parse-function-decl ()
   (let (return-type name args)
-    (setf return-type (parse-function-return-type))
+    (setf return-type (butlast (parse-ident-list)))
+    (uneat-token)
     (setf name (eat-token-value :ident))
-    (eat-paren #\()
+    (eat-punc #\()
     (setf args (parse-function-parameter-list))
-    (eat-paren #\))
+    (eat-punc #\))
     (eat-punc #\;)
-    (list return-type name args)))
+    (make-c-func :return-type return-type
+                 :name name
+                 :args args)))
 
-(defun parse-function-return-type ()
-  (prog1
-      (butlast (parse-ident-list))
-    (uneat-token)))
+(defun parse-function-callback ()
+  (let (return-type type args)
+    (setf return-type (parse-ident-list))
+    (eat-punc #\()
+    (setf type (parse-ident-list))
+    (eat-punc #\))
+    (eat-punc #\()
+    (setf args (parse-function-parameter-list))
+    (eat-punc #\))
+    (eat-punc #\;)
+    (make-c-callback :return-type return-type
+                     :type type
+                     :args args)))
 
 (defun parse-function-parameter-list ()
   (prog1
@@ -171,6 +251,14 @@
         ))))
 
 
+(defun parse-extern ()
+  (eat-ident :extern)
+  (eat-token :string "C")
+  (eat-punc #\{)
+  (prog1
+      (parse1)
+    (eat-punc #\})))
+
 (defun parse-typedef ()
   (eat-ident :typedef)
   (case (peek-token-value)
@@ -179,57 +267,88 @@
     (:enum
      (parse-typedef-enum))
     (t
-     (parse-typedef-simple))))
+     (or (restore-parse-error
+          (parse-function-callback))
+         (parse-typedef-simple)))))
 
 (defun parse-typedef-struct ()
   (eat-ident :struct)
-  (parse-typedef-complex 'parse-typedef-struct-body))
+  (parse-typedef-complex 'parse-typedef-struct-body 'make-c-struct))
 
 (defun parse-typedef-struct-body ()
   (parse-separated-ident-list #\;))
 
 (defun parse-typedef-enum ()
   (eat-ident :enum)
-  (parse-typedef-complex 'parse-typedef-enum-body))
+  (parse-typedef-complex 'parse-typedef-enum-body 'make-c-enum))
 
 (defun parse-typedef-enum-body ()
   (let ((value 0)
         symbol body)
     (loop
       (setf symbol (eat-token-value :ident))
-      (when (operator-p #\=)
-        (eat-operator #\=)
+      (when (operator-p :=)
+        (eat-operator :=)
         (setf value (eat-token-value)))
       (push (list symbol value) body)
-      (when (paren-p #\})
+      (when (punc-p #\})
         (return))
       (eat-punc #\,)
       (incf value))
     (nreverse body)))
 
-(defun parse-typedef-complex (body-parser)
+(defun parse-typedef-complex (body-parser struct-maker)
   (let (name body alias)
     (when (ident-p)
       (setf name (eat-token-value :ident)))
-    (eat-paren #\{)
+    (eat-punc #\{)
     (setf body (funcall body-parser))
-    (eat-paren #\})
-    (setf alias (parse-typedef-complex-alias))
+    (eat-punc #\})
+    (setf alias (parse-typedef-alias))
     (eat-punc #\;)
-    (list name body alias)
-    ))
+    ;; –¼‘O‚Ì•â³
+    ;;   typedef struct { } Foo;
+    ;;   typedef struct _Foo { } Foo;
+    (when (and alias
+               (or (not name)
+                   (string-match "^_" (string name))))
+      (setf name (car alias)
+            alias (cdr alias)))
+    (cons
+     (funcall struct-maker :name name :members body)
+     (alias->c-types name alias))))
 
-(defun parse-typedef-complex-alias ()
+(defun alias->c-types (name alias)
+  (flet ((ptr-type-p (e)
+           (listp e))
+         (raw-type (e)
+           (cadr e))
+         (ptr-type (e)
+           (car e))
+         (make-ptr (e ptr)
+           (cons ptr (if (listp e) e (list e))))
+         )
+    (mapcar #'(lambda (e)
+                (if (ptr-type-p e)
+                    (make-c-type :type (raw-type e)
+                                 :decl (make-ptr name (ptr-type e)))
+                  (make-c-type :type e :decl name)))
+            alias)))
+
+(defun parse-typedef-alias ()
   (mapcar #'car (parse-separated-ident-list #\,)))
 
 (defun parse-typedef-simple ()
-  (let ((type-name (eat-token-value :ident))
-        type-decl)
-    (while (not (punc-p #\;))
+  (let (type-decl alias)
+    (while (and (not (punc-p #\;))
+                (not (punc-p #\,)))
       (push (eat-token-value :ident) type-decl))
+    (when (punc-p #\,)
+      (eat-punc #\,)
+      (setf alias (parse-typedef-alias)))
+    (push (pop type-decl) alias)
     (eat-punc #\;)
-    (list type-name (nreverse type-decl))
-    ))
+    (alias->c-types (nreverse type-decl) alias)))
 
 (defun parse-separated-ident-list (separator)
   (let (list)

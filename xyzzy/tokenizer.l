@@ -2,7 +2,10 @@
 ;; (tokenize "C:/Program Files/Microsoft SDKs/Windows/v6.0A/Include/winhttp.h" :file t)
 
 (defparameter *c-keyword-list*
-  (list "typedef" "enum" "struct" "union" "const"))
+  (list "typedef" "enum" "struct" "union" "const" "extern"))
+
+(defparameter *c-ignore-ident-list*
+  (list "IN" "OUT" "OPTIONAL"))
 
 (defparameter *c-operator-list*
   (list "=" "*=" "/=" "%=" "+=" "-=" "<<=" ">>=" "&=" "^=" "|="
@@ -14,16 +17,9 @@
         "++" "--" "sizeof"
         "." "->" "++" "--"))
 
-(defparameter *c-paren-list*
-  (list "(" ")" "{" "}" "[" "]"))
-
 (defparameter *c-operator-list-regexp*
   (format nil "\\(~{~A~^\\|~}\\)"
           (mapcar 'regexp-quote *c-operator-list*)))
-
-(defparameter *c-paren-list-regexp*
-  (format nil "\\(~{~A~^\\|~}\\)"
-          (mapcar 'regexp-quote *c-paren-list*)))
 
 
 (defun make-token (lineno column type value)
@@ -35,14 +31,13 @@
 (defun token-value (token)  (nth 3 token))
 
 
+(defun tokenize-string (string &key ignore)
+  (tokenize string :ignore ignore))
 
-(defun tokenize-string (string)
-  (tokenize string))
+(defun tokenize-file (file &key ignore)
+  (tokenize file :file t :ignore ignore))
 
-(defun tokenize-file (file)
-  (tokenize file :file t))
-
-(defun tokenize (string-or-file &key file)
+(defun tokenize (string-or-file &key file ignore)
   (let ((b (get-buffer-create "*temp*")))
     (unwind-protect
         (progn
@@ -53,19 +48,21 @@
           (goto-char (point-min))
           (let (r token)
             (loop
-              (push (or (scan-next-token)
-                        (return))
-                    r))
+              (let ((token (scan-next-token)))
+                (unless token
+                  (return))
+                (unless (member (token-type token) ignore)
+                  (push token r)))
+              r)
             (nreverse r)))
       (delete-buffer b))))
 
 (defun scan-next-token ()
-  (let ((column (current-column))
-        (lineno (current-line-number)))
-    (multiple-value-bind (type token)
-        (scan-next-token1)
-      (when token
-        (make-token lineno column type token)))))
+  (multiple-value-bind (type token)
+      (scan-next-token1)
+    (when token
+      (make-token (current-line-number) (current-column)
+                  type token))))
 
 (defun scan-next-token1 ()
   (let ((opoint (point)))
@@ -79,6 +76,8 @@
            (current-char ()
              (forward-char)
              (char-before (point)))
+           (keyword (str)
+             (intern str :keyword))
            )
       (cond ((eobp)
              (values nil nil))
@@ -95,15 +94,17 @@
              (values :comment (substr)))
             ((looking-at "#[ \t]*\\([a-z]+\\)")
              (forward-matched)
-             (values :directive (match-keyword 1)))
+             (values :directive (keyword (match-string 1))))
             ((looking-at "\\(\\*+\\)?[ \t]*\\([a-zA-Z_][a-zA-Z0-9_]*\\)")
              (forward-matched)
              (let* ((ptr (match-string 1))
-                    (ident (match-string 2))
-                    (sym (if (member ident *c-keyword-list* :test #'string=)
-                             (intern ident :keyword)
-                           (intern ident))))
-               (values :ident (if ptr (list (intern ptr) sym) sym))))
+                    (ident (match-string 2)))
+               (if (member ident *c-ignore-ident-list* :test #'string=)
+                   nil
+                 (let ((sym (if (member ident *c-keyword-list* :test #'string=)
+                                (keyword ident)
+                              (intern ident))))
+                   (values :ident (if ptr (list (intern ptr) sym) sym))))))
             ((looking-at "\\([+-]?[0-9]*\\.[0-9]\\([eE][0-9]+\\)?\\)[FDfd]*")
              (forward-matched)
              (values :number (read-from-string (match-string 1))))
@@ -116,14 +117,18 @@
             ((looking-at "\\([+-]?\\)\\([1-9][0-9]*\\)[ULul]*")
              (forward-matched)
              (values :number (looking-number 10)))
-            ((looking-at "\\.\\.\\.")
+            ((looking-at "N?\"\\(.*?\\)\"")
              (forward-matched)
+             (values :string (match-string 1)))
+            ((looking-at "<\\(.*?\\)>")
+             (forward-matched)
+             (values :include (match-string 1)))
+            ((looking-for "...")
+             (forward-char 3)
              (values :vaarg (substr)))
             ((looking-at *c-operator-list-regexp*)
              (forward-matched)
-             (values :operator (intern (substr) :keyword)))
-            ((looking-at *c-paren-list-regexp*)
-             (values :paren (current-char)))
+             (values :operator (keyword (substr))))
             (t
              (values :punc (current-char)))
             ))))
