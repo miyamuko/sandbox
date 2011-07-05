@@ -4,9 +4,6 @@
 (defparameter *c-keyword-list*
   (list "typedef" "enum" "struct" "union" "const" "extern"))
 
-(defparameter *c-ignore-ident-list*
-  (list "IN" "OUT" "OPTIONAL"))
-
 (defparameter *c-operator-list*
   (list "=" "*=" "/=" "%=" "+=" "-=" "<<=" ">>=" "&=" "^=" "|="
         "||" "&&" "|" "&" "~"
@@ -98,13 +95,11 @@
             ((looking-at "\\(\\*+\\)?[ \t]*\\([a-zA-Z_][a-zA-Z0-9_]*\\)")
              (forward-matched)
              (let* ((ptr (match-string 1))
-                    (ident (match-string 2)))
-               (if (member ident *c-ignore-ident-list* :test #'string=)
-                   nil
-                 (let ((sym (if (member ident *c-keyword-list* :test #'string=)
-                                (keyword ident)
-                              (intern ident))))
-                   (values :ident (if ptr (list (intern ptr) sym) sym))))))
+                    (ident (match-string 2))
+                    (sym (if (member ident *c-keyword-list* :test #'string=)
+                             (keyword ident)
+                           (intern ident))))
+                 (values :ident (if ptr (list (intern ptr) sym) sym))))
             ((looking-at "\\([+-]?[0-9]*\\.[0-9]\\([eE][0-9]+\\)?\\)[FDfd]*")
              (forward-matched)
              (values :number (read-from-string (match-string 1))))

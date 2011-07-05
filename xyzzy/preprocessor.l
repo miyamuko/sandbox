@@ -1,3 +1,6 @@
+(defparameter *c-ignore-ident-list*
+  (list "IN" "OUT" "OPTIONAL"))
+
 (defun preprocess (token)
   (let ((*token* token))
     (filter-continued-line)
@@ -12,15 +15,16 @@
 (defun filter-specstrings ()
   (let (r skip (nest 0))
     (while *token*
-      (cond (skip
-             (cond ((punc-p #\() (incf nest))
-                   ((punc-p #\)) (decf nest))
-                   (t (setf skip (not (zerop nest))))))
-            (t
-             (when (and (ident-p)
-                        (symbolp (peek-token-value))
-                        (string-match "^__" (string (peek-token-value))))
-               (setf skip t))))
+      (when skip
+        (cond ((punc-p #\() (incf nest))
+              ((punc-p #\)) (decf nest))
+              (t (setf skip (not (zerop nest))))))
+      (unless skip
+        (let ((value (peek-token-value)))
+          (when (and (ident-p) (symbolp value)
+                     (or (string-match "^__" (string (peek-token-value)))
+                         (member value *c-ignore-ident-list* :test #'string=)))
+            (setf skip t))))
       (let ((token (get-token)))
         (unless skip
           (push token r))))
