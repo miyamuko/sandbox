@@ -23,6 +23,9 @@
 (defstruct c-macro
   name value)
 
+(defstruct c-if
+  condition body else)
+
 
 (defun peek-token ()
   (car *token*))
@@ -128,6 +131,9 @@
 (defun eat-ident (value)
   (eat-token :ident value))
 
+(defun eat-directive (value)
+  (eat-token :directive value))
+
 (defun eat-punc (value)
   (eat-token :punc value))
 
@@ -136,39 +142,50 @@
 
 
 (defun parse-file (c-header-file)
-  (parse (tokenize-file c-header-file :ignore '(:whitespace :comment))))
+  (parse-token (tokenize-file c-header-file :ignore '(:whitespace :comment))))
 
 (defun parse-string (c-header-string)
-  (parse (tokenize-string c-header-string :ignore '(:whitespace :comment))))
+  (parse-token (tokenize-string c-header-string :ignore '(:whitespace :comment))))
 
-(defun parse (token)
+(defun parse-token (token)
   (let ((*token* (preprocess token)))
-    (parse1)))
+    (parse)))
 
-(defun parse1 ()
-  (let (ast)
-    (while *token*
+(defun parse ()
+  (prog1
+      (try-parse)
+    (when *token*
+      (error-unknown-token))))
+
+(defun try-parse ()
+  (let ((ast nil)
+        (*stop-parse* nil))
+    (declare (special *stop-parse*))
+    (while (and *token* (not *stop-parse*))
       (eat-whitespace-or-comment)
       (let ((defs (case (peek-token-type)
                     (:directive (parse-directive))
                     (:ident (parse-ident))
-                    (t
-                     (error-unknown-token)))))
+                    (t :error))))
+        (when (and (atom defs) (eq defs :error))
+          (return))
         (dolist (def (if (atom defs)
                          (list defs)
                        defs))
-          (push def ast))))
+          (when def
+            (push def ast)))))
     (nreverse ast)))
 
 (defun parse-directive ()
   (case (peek-token-value)
     (:define (parse-directive-define))
-    (:include (parse-directive-include))
+    (:include (parse-directive-ignore))
     (:pragma (parse-directive-ignore))
     (:ifdef (parse-directive-ignore))
     (:if (parse-directive-if))
-    (:else (parse-directive-else))
-    (:endif (parse-directive-endif))
+    (:elif (parse-directive-elif))
+    (:else (parse-directive-stop))
+    (:endif (parse-directive-stop))
     (t (error-unknown-token))))
 
 (defun parse-directive-define ()
@@ -183,20 +200,36 @@
   (eat-tokens-of-line)
   nil)
 
-(defun parse-directive-include ()
-  (eat-tokens-of-line)
-  nil)
-
 (defun parse-directive-if ()
-  (eat-tokens-of-line)
-  nil)
+  (eat-directive :if)
+  (parse-directive-if1 :eat-endif t))
 
-(defun parse-directive-else ()
-  (eat-tokens-of-line)
-  nil)
+(defun parse-directive-elif ()
+  (eat-directive :elif)
+  (parse-directive-if1 :eat-endif nil))
 
-(defun parse-directive-endif ()
-  (eat-tokens-of-line)
+(defun parse-directive-if1 (&key eat-endif)
+  (let ((if-condition (eat-tokens-of-line))
+        (if-body (try-parse))
+        else-body)
+    (case (peek-token-value)
+      (:elif
+       (setf else-body (try-parse)))
+      (:else
+       (eat-directive :else)
+       (setf else-body (try-parse)))
+      (:endif
+       )
+      (t
+       (error-unknown-token)))
+    (when eat-endif
+      (eat-directive :endif))
+    (make-c-if :condition if-condition
+               :body if-body
+               :else else-body)))
+
+(defun parse-directive-stop ()
+  (setf *stop-parse* t)
   nil)
 
 (defun parse-ident ()
@@ -256,7 +289,7 @@
   (eat-token :string "C")
   (eat-punc #\{)
   (prog1
-      (parse1)
+      (try-parse)
     (eat-punc #\})))
 
 (defun parse-typedef ()
