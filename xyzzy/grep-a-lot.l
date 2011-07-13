@@ -4,6 +4,15 @@
 (defparameter *grep-a-lot-last-context* nil)
 
 
+(defun grep-a-lot-setup-keys ()
+  ;; M-g のデフォルトは goto-line なので、代わりに M-g g に設定しておく
+  (define-key esc-map '(#\g #\g) 'goto-line)
+  (define-key esc-map '(#\g #\]) 'grep-a-lot-goto-next)
+  (define-key esc-map '(#\g #\[) 'grep-a-lot-goto-prev)
+  (define-key esc-map '(#\g #\-) 'grep-a-lot-pop-stack)
+  (define-key esc-map '(#\g #\_) 'grep-a-lot-clear-stack)
+  (define-key esc-map '(#\g #\=) 'grep-a-lot-restart-context))
+
 (defun grep-a-lot-restart-context ()
   "現在の grep バッファを開く"
   (interactive)
