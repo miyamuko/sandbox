@@ -82,7 +82,7 @@
   ;; *last-grep-regexp* や *last-fgrep-regexp* や *minibuffer-search-string-history*
   ;; を見る方法もあるが、ed::scan-files を直接呼んだ場合は取得できない。
   ;; そこで、ed::*find-error-scanner* というバッファローカル変数に入っている
-  ;; scanner というクロージャが束縛している pattern 変数から取り出す。
+  ;; クロージャが束縛している pattern 変数から取り出す。
   (let* ((vars (si:closure-variable ed::*find-error-scanner*))
          (pattern (cdr (assoc 'ed::pattern vars))))
     (cond ((typep pattern 'regexp)
