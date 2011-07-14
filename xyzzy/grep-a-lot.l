@@ -80,9 +80,12 @@
   (let ((regexp (format nil (regexp-quote *grep-a-lot-buffer-format*) ".*")))
     (string-matchp regexp (buffer-name buffer))))
 
-(defun grep-a-lot-buffer-name ()
+(defun grep-a-lot-buffer-name (pattern)
   (format nil *grep-a-lot-buffer-format*
-          (abbreviate-display-string (grep-a-lot-pattern) *grep-a-lot-abbrev-length*)))
+          (abbreviate-display-string pattern *grep-a-lot-abbrev-length*)))
+
+(defun grep-a-lot-rename-buffer (pattern)
+  (rename-buffer (grep-a-lot-buffer-name pattern)))
 
 (defun grep-a-lot-pattern ()
   ;; ŒŸõ•¶š—ñ‚ğŠæ’£‚Á‚Äæ“¾‚·‚éB
@@ -101,7 +104,7 @@
 
 
 (defun rename-grep-buffer-hook ()
-  (rename-buffer (grep-a-lot-buffer-name)))
+  (grep-a-lot-rename-buffer (grep-a-lot-pattern)))
 
 (defun grep-a-lot-first-error-hook ()
   (when (equal *this-command* 'first-error)
