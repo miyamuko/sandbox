@@ -49,8 +49,7 @@
                 (unless token
                   (return))
                 (unless (member (token-type token) ignore)
-                  (push token r)))
-              r)
+                  (push token r))))
             (nreverse r)))
       (delete-buffer b))))
 

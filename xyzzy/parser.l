@@ -1,5 +1,5 @@
-(load "tokenizer.l")
-(load "preprocessor.l")
+(require "xyzzy/tokenizer.l")
+(require "xyzzy/preprocessor.l")
 
 (defvar *prev-token* nil)
 (defvar *token* nil)
